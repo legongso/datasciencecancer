@@ -94,8 +94,8 @@ html, body, .stApp, .stApp * {
 
 st.markdown("""
 <div class="hero-card">
-    <h1>폐암 환자 군집 분석</h1>
-    <p>Lung Cancer Patient Clustering · K-Means Unsupervised Learning</p>
+    <h1>폐암 환자 군집 분석 (3D 인터랙티브 Map)</h1>
+    <p>Lung Cancer Patient Clustering · K-Means 3D WebGL Visualization</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -149,20 +149,16 @@ CLUSTER_INFO_LIST = [
     {"name": "폐암 위험군",   "tone": "warn",    "desc": "흡연·음주가 누적된 위험 환자군입니다."},
 ]
 
-# 이미지 원본 데이터 분포와 유사한 탬플릿 좌표 데이터 생성 (나이, 흡연량, 군집ID)
-# 0: 중간군(보라), 1: 건강군(초록), 2: 고위험군(청회색), 3: 폐암 위험군(노랑)
+# 3D 공간을 채울 가상 데이터셋 (나이, 흡연량, 음주량, 군집 ID)
 dataset_points = [
-    # 건강군 (초록 계열)
-    [25, 2, 1], [28, 0, 1], [30, 0, 1], [34, 0, 1], [33, 4, 1], [33, 8, 1], [35, 3, 1], [44, 5, 1], [45, 2, 1],
-    # 중간군 (보라 계열)
-    [18, 10, 0], [19, 12, 0], [21, 20, 0], [22, 12, 0], [22, 20, 0], [25, 20, 0], [26, 10, 0], [26, 13, 0], [28, 10, 0], 
-    [31, 20, 0], [34, 12, 0], [35, 20, 0], [35, 25, 0], [36, 13, 0], [37, 10, 0], [37, 15, 0], [39, 15, 0], [39, 18, 0], 
-    [42, 12, 0], [47, 12, 0], [51, 25, 0], [58, 15, 0],
-    # 폐암 위험군 (노랑 계열)
-    [26, 34, 3], [27, 20, 3], [28, 20, 3], [34, 25, 3], [40, 20, 3], [42, 22, 3], [43, 30, 3], [44, 30, 3], [47, 15, 3],
-    # 고위험군 (청회색 계열)
-    [50, 20, 2], [52, 18, 2], [53, 20, 2], [55, 15, 2], [55, 20, 2], [56, 20, 2], [59, 20, 2], [62, 5, 2], [62, 15, 2], 
-    [62, 20, 2], [62, 25, 2], [63, 20, 2], [68, 4, 2], [69, 20, 2], [73, 10, 2], [75, 15, 2], [77, 3, 2], [77, 20, 2]
+    # 건강군 (초록 계열) - 나이 낮음, 흡연 낮음, 음주 낮음
+    [25, 2, 1, 1], [28, 0, 0, 1], [30, 1, 2, 1], [34, 0, 1, 1], [33, 4, 2, 1], [45, 2, 1, 1], [40, 4, 2, 1],
+    # 중간군 (보라 계열) - 전반적으로 중간 수치에 분포
+    [18, 10, 4, 0], [22, 12, 3, 0], [25, 20, 5, 0], [28, 10, 4, 0], [34, 12, 5, 0], [37, 15, 4, 0], [42, 12, 5, 0], [51, 25, 3, 0],
+    # 폐암 위험군 (노랑 계열) - 흡연량과 음주량이 매우 높은 군집
+    [26, 34, 8, 3], [34, 25, 9, 3], [40, 20, 7, 3], [43, 30, 8, 3], [44, 30, 9, 3], [48, 35, 6, 3], [55, 28, 8, 3],
+    # 고위험군 (청회색 계열) - 나이가 많고 고위험인 군집
+    [58, 15, 4, 2], [62, 5, 3, 2], [62, 20, 5, 2], [62, 25, 6, 2], [69, 20, 4, 2], [73, 10, 2, 2], [77, 20, 5, 2], [75, 15, 3, 2]
 ]
 
 data_payload = {
@@ -171,43 +167,39 @@ data_payload = {
     "points": dataset_points,
     "vars": [
         {"key": "smoke", "label": "흡연량",   "min": 0,  "max": 40, "default": 10, "decimals": 0},
-        {"key": "alc",   "label": "음주량", "min": 0,  "max": 10, "default": 3,  "decimals": 0},
-        {"key": "age",   "label": "나이",   "min": 15, "max": 80, "default": 45, "decimals": 0},
+        {"key": "alc",   "label": "음주량",   "min": 0,  "max": 10, "default": 3,  "decimals": 0},
+        {"key": "age",   "label": "나이",     "min": 15, "max": 80, "default": 45, "decimals": 0},
     ]
 }
 payload_json = json.dumps(data_payload)
 
-# ===== HTML 컴포넌트 (중앙 산점도 패널 레이아웃 구현) =====
+# ===== HTML 컴포넌트 (Three.js 기반 3D Scatter Plot 구현) =====
 html = """
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <style>
 @font-face {
     font-family: 'GmarketSans';
     src: url('https://fastly.jsdelivr.net/gh/projectnoonnu/noonfonts_2001@1.1/GmarketSansLight.woff') format('woff');
     font-weight: 300;
-    font-style: normal;
 }
 @font-face {
     font-family: 'GmarketSans';
     src: url('https://fastly.jsdelivr.net/gh/projectnoonnu/noonfonts_2001@1.1/GmarketSansMedium.woff') format('woff');
     font-weight: 500;
-    font-style: normal;
 }
 @font-face {
     font-family: 'GmarketSans';
     src: url('https://fastly.jsdelivr.net/gh/projectnoonnu/noonfonts_2001@1.1/GmarketSansBold.woff') format('woff');
     font-weight: 700;
-    font-style: normal;
 }
 
-* { 
-    box-sizing: border-box; 
-    font-family: 'GmarketSans', sans-serif; 
-}
-body { margin: 0; padding: 0; background: transparent; color: #fff; }
+* { box-sizing: border-box; font-family: 'GmarketSans', sans-serif; }
+body { margin: 0; padding: 0; background: transparent; color: #fff; overflow: hidden; }
 
 .workspace {
     display: grid;
@@ -337,17 +329,25 @@ body { margin: 0; padding: 0; background: transparent; color: #fff; }
     letter-spacing: 0.06em;
 }
 
-/* 차트 영역 스타일 */
+/* 3D 캔버스 영역 */
 .chart-container {
     flex: 1;
     position: relative;
     width: 100%;
     min-height: 0;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 12px;
 }
-#scatterChart {
-    width: 100%;
-    height: 100%;
-    display: block;
+#threeCanvas { width: 100%; height: 100%; display: block; }
+
+/* 차트 내부 축 가이드 텍스트 설명 */
+.axis-legend {
+    position: absolute;
+    bottom: 10px; left: 15px;
+    font-size: 0.68rem;
+    color: rgba(255,255,255,0.35);
+    line-height: 1.4;
+    pointer-events: none;
 }
 
 .result-headline { text-align: center; flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 0 12px; }
@@ -370,8 +370,8 @@ body { margin: 0; padding: 0; background: transparent; color: #fff; }
 }
 .result-name.safe { color: #6bcf9f; }
 .result-name.warn { color: #ffd166; }
-.result-name.danger { color: #b388ff; } /* 보라색 매핑 */
-.result-name.danger2 { color: #90caf9; } /* 청회색 매핑 */
+.result-name.danger { color: #b388ff; } 
+.result-name.danger2 { color: #90caf9; } 
 
 .result-desc {
     color: rgba(255,255,255,0.6);
@@ -381,12 +381,7 @@ body { margin: 0; padding: 0; background: transparent; color: #fff; }
     max-width: 260px;
 }
 
-.cluster-dots {
-    display: flex;
-    justify-content: center;
-    gap: 14px;
-    margin-top: 20px;
-}
+.cluster-dots { display: flex; justify-content: center; gap: 14px; margin-top: 20px; }
 .cluster-dot {
     width: 11px; height: 11px;
     border-radius: 50%;
@@ -424,15 +419,20 @@ body { margin: 0; padding: 0; background: transparent; color: #fff; }
 <div class="workspace">
     <div class="panel">
         <div class="panel-label">Input Parameters</div>
-        <div class="panel-hint">핸들을 드래그하여 환자 정보를 변경하세요</div>
+        <div class="panel-hint">핸들을 조절해 변수를 실시간 변경해보세요</div>
         <div class="faders" id="faders"></div>
     </div>
     
     <div class="panel">
-        <div class="panel-label">Cluster Distribution Map</div>
-        <div class="panel-hint">전체 데이터 분포 상의 현재 입력 위치 트래킹 (X)</div>
-        <div class="chart-container">
-            <canvas id="scatterChart"></canvas>
+        <div class="panel-label">3D Cluster Space Map</div>
+        <div class="panel-hint">마우스 드래그: 회전 | 휠: 확대/축소</div>
+        <div class="chart-container" id="canvasContainer">
+            <canvas id="threeCanvas"></canvas>
+            <div class="axis-legend">
+                <span style="color:#ff6b6b">■ X축: 나이 (Red)</span><br>
+                <span style="color:#51cf66">■ Y축: 흡연량 (Green)</span><br>
+                <span style="color:#339af0">■ Z축: 음주량 (Blue)</span>
+            </div>
         </div>
     </div>
     
@@ -461,15 +461,14 @@ var POINTS = DATA.points;
 var values = {};
 VARS.forEach(function(v) { values[v.key] = v.default; });
 
-// 군집 톤별 실제 색상 Hex 코드 정의
 var TONE_COLORS = {
-    "safe": "#6bcf9f",    // 초록
-    "warn": "#ffd166",    // 노랑
-    "danger": "#b388ff",  // 보라
-    "danger2": "#90caf9"  // 청회색
+    "safe": 0x6bcf9f,
+    "warn": 0xffd166,
+    "danger": 0xb388ff,
+    "danger2": 0x90caf9
 };
 
-// 페이더 DOM 생성
+// 페이더 UI 생성
 var fadersContainer = document.getElementById('faders');
 VARS.forEach(function(v) {
     var col = document.createElement('div');
@@ -489,7 +488,6 @@ VARS.forEach(function(v) {
     fadersContainer.appendChild(col);
 });
 
-// 군집 상태 도트 표시기 생성
 var dotsContainer = document.getElementById('dots');
 for (var i = 0; i < PARAMS.n_clusters; i++) {
     var dot = document.createElement('div');
@@ -503,7 +501,6 @@ function fmt(val, decimals) {
     return val.toFixed(decimals);
 }
 
-// 클라이언트 사이드 고속 K-Means 예측 함수
 function predict() {
     var x = [values.smoke, values.alc, values.age];
     var scaled = [];
@@ -519,114 +516,73 @@ function predict() {
             var diff = scaled[j] - center[j];
             d += diff * diff;
         }
-        if (d < bestDist) {
-            bestDist = d;
-            bestIdx = c;
-        }
+        if (d < bestDist) { bestDist = d; bestIdx = c; }
     }
     return bestIdx;
 }
 
-// 2D HTML5 Canvas 산점도 시각화 구현
-var canvas = document.getElementById('scatterChart');
-var ctx = canvas.getContext('2d');
+// ===== Three.js 3D 엔진 초기화 및 공간 구현 =====
+var container = document.getElementById('canvasContainer');
+var canvas = document.getElementById('threeCanvas');
 
-function resizeCanvas() {
-    var rect = canvas.parentElement.getBoundingClientRect();
-    // 선명도 확보를 위한 디바이스 픽셀 비율 매핑
-    var dpr = window.devicePixelRatio || 1;
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    ctx.scale(dpr, dpr);
-    canvas.style.width = rect.width + 'px';
-    canvas.style.height = rect.height + 'px';
-}
+var scene = new THREE.Scene();
+var camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+var renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+renderer.setSize(container.clientWidth, container.clientHeight);
 
-function drawChart() {
-    var w = canvas.width / (window.devicePixelRatio || 1);
-    var h = canvas.height / (window.devicePixelRatio || 1);
-    ctx.clearRect(0, 0, w, h);
+var controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
 
-    // 차트 내부 여백 설정
-    var padding = { top: 20, right: 20, bottom: 40, left: 45 };
-    var chartW = w - padding.left - padding.right;
-    var chartH = h - padding.top - padding.bottom;
+// 카메라 초기 시점 위치 배치
+camera.position.set(25, 20, 25);
+controls.target.set(0, 0, 0);
+controls.update();
 
-    // 축 축척 경계 설정 (나이: 15~80, 흡연량: -2~36)
-    var xMin = 15, xMax = 80;
-    var yMin = -2, yMax = 36;
+// 축 가이드 라인 배치 생성 (기본 크기: 15)
+var axesHelper = new THREE.AxesHelper(15);
+scene.add(axesHelper);
 
-    function getXPixel(val) { return padding.left + ((val - xMin) / (xMax - xMin)) * chartW; }
-    function getYPixel(val) { return padding.top + chartH - ((val - yMin) / (yMax - yMin)) * chartH; }
+// 공간 내부 그리드(Grid) 격자 바닥 배치
+var gridHelper = new THREE.GridHelper(30, 30, 0x444444, 0x222222);
+gridHelper.position.y = -5;
+scene.add(gridHelper);
 
-    // 1. 차트 모눈선 및 격자 그리기
-    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
-    ctx.lineWidth = 1;
-    ctx.fillStyle = 'rgba(255,255,255,0.3)';
-    ctx.font = '10px GmarketSans';
-    ctx.textAlign = 'center';
+// 데이터 범위 바운더리 매핑용 정규화 헬퍼 함수
+// 나이(15~80) -> (-10~10), 흡연량(0~40) -> (-5~15), 음주량(0~10) -> (-10~10)
+function mapX(val) { return ((val - 15) / (80 - 15)) * 20 - 10; }
+function mapY(val) { return ((val - 0) / (40 - 0)) * 20 - 5; }
+function mapZ(val) { return ((val - 0) / (10 - 0)) * 20 - 10; }
 
-    // X축 가이드 (나이)
-    for (var xVal = 20; xVal <= 80; xVal += 10) {
-        var cx = getXPixel(xVal);
-        ctx.beginPath(); ctx.moveTo(cx, padding.top); ctx.lineTo(cx, padding.top + chartH); ctx.stroke();
-        ctx.fillText(xVal, cx, padding.top + chartH + 18);
-    }
-    // Y축 가이드 (흡연량)
-    ctx.textAlign = 'right';
-    for (var yVal = 0; yVal <= 35; yVal += 5) {
-        var cy = getYPixel(yVal);
-        ctx.beginPath(); ctx.moveTo(padding.left, cy); ctx.lineTo(padding.left + chartW, cy); ctx.stroke();
-        ctx.fillText(yVal, padding.left - 10, cy + 4);
-    }
+// 데이터셋 점(구체 객체형태) 생성 및 3D 공간 추가
+POINTS.forEach(function(pt) {
+    var geo = new THREE.SphereGeometry(0.4, 16, 16);
+    var info = CLUSTER_INFO[pt[3]];
+    var colHex = TONE_COLORS[info.tone] || 0xffffff;
+    var mat = new THREE.MeshBasicMaterial({ color: colHex, transparent: true, opacity: 0.7 });
+    var mesh = new THREE.Mesh(geo, mat);
+    
+    mesh.position.set(mapX(pt[0]), mapY(pt[1]), mapZ(pt[2]));
+    scene.add(mesh);
+});
 
-    // 2. 축 레이블 텍스트 그리기
-    ctx.fillStyle = 'rgba(255,255,255,0.45)';
-    ctx.font = '500 11px GmarketSans';
-    ctx.textAlign = 'center';
-    ctx.fillText('나이', padding.left + chartW / 2, padding.top + chartH + 36);
+// 실시간 트래킹 입력값 'X' 표시용 3D 오브젝트 제작
+var crossGroup = new THREE.Group();
+var crossMat = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 3 });
+var size = 1.2;
 
-    ctx.save();
-    ctx.translate(14, padding.top + chartH / 2);
-    ctx.rotate(-Math.PI / 2);
-    ctx.fillText('흡연량', 0, 0);
-    ctx.restore();
+// X 모양을 이룰 기하학 구조선 생성
+var g1 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-size, -size, 0), new THREE.Vector3(size, size, 0)]);
+var g2 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(size, -size, 0), new THREE.Vector3(-size, size, 0)]);
+var g3 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, -size, -size), new THREE.Vector3(0, size, size)]);
 
-    // 3. 기존 데이터 포인트 산점도 드로잉
-    POINTS.forEach(function(pt) {
-        var px = getXPixel(pt[0]);
-        var py = getYPixel(pt[1]);
-        var info = CLUSTER_INFO[pt[2]];
-        var color = TONE_COLORS[info.tone] || '#ffffff';
+crossGroup.add(new THREE.Line(g1, crossMat));
+crossGroup.add(new THREE.Line(g2, crossMat));
+crossGroup.add(new THREE.Line(g3, crossMat));
+scene.add(crossGroup);
 
-        ctx.beginPath();
-        ctx.arc(px, py, 5, 0, 2 * Math.PI);
-        ctx.fillStyle = color;
-        ctx.globalAlpha = 0.55; // 반투명 설정 효과 연출
-        ctx.fill();
-        ctx.globalAlpha = 1.0;
-    });
-
-    // 4. 입력 타겟 실시간 위치 포인팅 ('X')
-    var targetX = getXPixel(values.age);
-    var targetY = getYPixel(values.smoke);
-    var size = 9;
-
-    // 가독성을 극대화하기 위해 검은색 두꺼운 X 표시에 흰색 글로우 스트로크 적용
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 6;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(targetX - size, targetY - size); ctx.lineTo(targetX + size, targetY + size);
-    ctx.moveTo(targetX + size, targetY - size); ctx.lineTo(targetX - size, targetY + size);
-    ctx.stroke();
-
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(targetX - size, targetY - size); ctx.lineTo(targetX + size, targetY + size);
-    ctx.moveTo(targetX + size, targetY - size); ctx.lineTo(targetX - size, targetY + size);
-    ctx.stroke();
+function updateTargetPosition() {
+    crossGroup.position.set(mapX(values.age), mapY(values.smoke), mapZ(values.alc));
 }
 
 function updateResult() {
@@ -642,20 +598,17 @@ function updateResult() {
     var dots = document.querySelectorAll('.cluster-dot');
     dots.forEach(function(d, i) {
         d.className = 'cluster-dot';
-        if (i === clusterId) {
-            d.classList.add('active', info.tone);
-        }
+        if (i === clusterId) d.classList.add('active', info.tone);
     });
 
     document.getElementById('s-smoke').textContent = Math.round(values.smoke);
     document.getElementById('s-alc').textContent = Math.round(values.alc);
     document.getElementById('s-age').textContent = Math.round(values.age);
 
-    // 슬라이더 조작 시 매번 캔버스 다시 그리기 트리거
-    drawChart();
+    updateTargetPosition();
 }
 
-// 페이더 조작 이벤트 연결
+// 페이더 로직 연동
 document.querySelectorAll('.fader-col').forEach(function(col) {
     var min = parseFloat(col.dataset.min);
     var max = parseFloat(col.dataset.max);
@@ -671,10 +624,8 @@ document.querySelectorAll('.fader-col').forEach(function(col) {
 
     function render() {
         var pct = (currentValue - min) / range;
-        var trackRect = track.getBoundingClientRect();
-        var h = trackRect.height;
         fill.style.height = (pct * 100) + '%';
-        handle.style.top = ((1 - pct) * h) + 'px';
+        handle.style.top = ((1 - pct) * track.getBoundingClientRect().height) + 'px';
         valueEl.textContent = fmt(currentValue, decimals);
     }
 
@@ -688,51 +639,43 @@ document.querySelectorAll('.fader-col').forEach(function(col) {
     }
 
     setTimeout(render, 50);
-    window.addEventListener('resize', function() {
-        render();
-        resizeCanvas();
-        drawChart();
-    });
 
     var dragging = false;
-
     trackWrap.addEventListener('pointerdown', function(e) {
-        e.preventDefault();
-        dragging = true;
-        col.classList.add('dragging');
-        setFromY(e.clientY);
+        e.preventDefault(); dragging = true;
+        col.classList.add('dragging'); setFromY(e.clientY);
         try { trackWrap.setPointerCapture(e.pointerId); } catch(err) {}
     });
-
-    trackWrap.addEventListener('pointermove', function(e) {
-        if (!dragging) return;
-        setFromY(e.clientY);
-    });
-
+    trackWrap.addEventListener('pointermove', function(e) { if (dragging) setFromY(e.clientY); });
     function stopDrag(e) {
-        if (!dragging) return;
-        dragging = false;
-        col.classList.remove('dragging');
+        if (!dragging) return; dragging = false; col.classList.remove('dragging');
         try { trackWrap.releasePointerCapture(e.pointerId); } catch(err) {}
     }
     trackWrap.addEventListener('pointerup', stopDrag);
     trackWrap.addEventListener('pointercancel', stopDrag);
-
-    trackWrap.addEventListener('wheel', function(e) {
-        e.preventDefault();
-        var step = range / 100;
-        var dir = e.deltaY < 0 ? 1 : -1;
-        currentValue = Math.max(min, Math.min(max, currentValue + dir * step));
-        values[key] = currentValue;
-        render();
-        updateResult();
-    }, { passive: false });
 });
 
-// 초기화 순서 제어
+// 화면 크기 반응형 갱신 루프
+window.addEventListener('resize', function() {
+    camera.aspect = container.clientWidth / container.clientHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(container.clientWidth, container.clientHeight);
+});
+
+// Three.js 애니메이션 프레임 렌더링 루프 (지속 호출)
+function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    
+    // 타겟 'X' 표시를 살짝 회전시켜 시각적인 포인팅 효과 부여
+    crossGroup.rotation.y += 0.01;
+    
+    renderer.render(scene, camera);
+}
+
 setTimeout(function() {
-    resizeCanvas();
     updateResult();
+    animate();
 }, 100);
 </script>
 </body>
