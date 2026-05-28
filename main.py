@@ -28,11 +28,31 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# ===== Streamlit Main UI Style (지마켓 산스 적용) =====
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+/* 지마켓 산스 웹폰트 로드 */
+@font-face {
+    font-family: 'GmarketSans';
+    src: url('https://fastly.jsdelivr.net/gh/projectnoonnu/noonfonts_2001@1.1/GmarketSansLight.woff') format('woff');
+    font-weight: 300;
+    font-style: normal;
+}
+@font-face {
+    font-family: 'GmarketSans';
+    src: url('https://fastly.jsdelivr.net/gh/projectnoonnu/noonfonts_2001@1.1/GmarketSansMedium.woff') format('woff');
+    font-weight: 500;
+    font-style: normal;
+}
+@font-face {
+    font-family: 'GmarketSans';
+    src: url('https://fastly.jsdelivr.net/gh/projectnoonnu/noonfonts_2001@1.1/GmarketSansBold.woff') format('woff');
+    font-weight: 700;
+    font-style: normal;
+}
+
 html, body, .stApp, .stApp * {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+    font-family: 'GmarketSans', -apple-system, BlinkMacSystemFont, sans-serif !important;
 }
 .stApp, [data-testid="stAppViewContainer"] { background: #0a0b0d !important; }
 [data-testid="stHeader"], [data-testid="stMain"], [data-testid="stMainBlockContainer"],
@@ -99,13 +119,12 @@ def load_params():
     else:
         return None, "KMeans 모델을 인식할 수 없습니다."
 
-    centers = kmeans.cluster_centers_.tolist()  # 스케일링된 공간의 중심점
+    centers = kmeans.cluster_centers_.tolist()
 
     if scaler is not None and hasattr(scaler, 'mean_') and hasattr(scaler, 'scale_'):
         mean = scaler.mean_.tolist()
         scale = scaler.scale_.tolist()
     else:
-        # 스케일러가 없으면 identity
         mean = [0.0] * len(centers[0])
         scale = [1.0] * len(centers[0])
 
@@ -123,7 +142,7 @@ if load_err or params is None:
              " 노트북에서 KMeans 모델을 lungkmeans.pkl, StandardScaler를 lungscaler.pkl로 같은 폴더에 저장해 주세요.")
     st.stop()
 
-# K=4 기준 군집 의미 (노트북 결과 분석)
+# K=4 기준 군집 의미
 CLUSTER_INFO_LIST = [
     {"name": "중간군",        "tone": "warn",    "desc": "위험 인자가 일부 누적된 중간 수준의 환자군입니다."},
     {"name": "건강군",        "tone": "safe",    "desc": "위험 인자가 낮아 상대적으로 건강한 환자군입니다."},
@@ -131,7 +150,6 @@ CLUSTER_INFO_LIST = [
     {"name": "폐암 위험군",   "tone": "danger",  "desc": "흡연·음주가 누적된 위험 환자군입니다."},
 ]
 
-# JS로 안전하게 데이터 전달
 data_payload = {
     "params": params,
     "clusterInfo": CLUSTER_INFO_LIST,
@@ -143,14 +161,37 @@ data_payload = {
 }
 payload_json = json.dumps(data_payload)
 
+# ===== HTML 컴포넌트 (내부 Web UI에도 지마켓 산스 적용) =====
 html = """
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-* { box-sizing: border-box; font-family: 'Inter', sans-serif; }
+/* iframe 내부 웹폰트 로드 */
+@font-face {
+    font-family: 'GmarketSans';
+    src: url('https://fastly.jsdelivr.net/gh/projectnoonnu/noonfonts_2001@1.1/GmarketSansLight.woff') format('woff');
+    font-weight: 300;
+    font-style: normal;
+}
+@font-face {
+    font-family: 'GmarketSans';
+    src: url('https://fastly.jsdelivr.net/gh/projectnoonnu/noonfonts_2001@1.1/GmarketSansMedium.woff') format('woff');
+    font-weight: 500;
+    font-style: normal;
+}
+@font-face {
+    font-family: 'GmarketSans';
+    src: url('https://fastly.jsdelivr.net/gh/projectnoonnu/noonfonts_2001@1.1/GmarketSansBold.woff') format('woff');
+    font-weight: 700;
+    font-style: normal;
+}
+
+* { 
+    box-sizing: border-box; 
+    font-family: 'GmarketSans', sans-serif; 
+}
 body { margin: 0; padding: 0; background: transparent; color: #fff; }
 
 .workspace {
@@ -418,14 +459,11 @@ function fmt(val, decimals) {
 
 // 클라이언트 사이드 K-Means 예측
 function predict() {
-    // 입력 순서: [흡연, 음주량, 나이] - 노트북과 동일
     var x = [values.smoke, values.alc, values.age];
-    // 스케일링
     var scaled = [];
     for (var i = 0; i < x.length; i++) {
         scaled.push((x[i] - PARAMS.mean[i]) / PARAMS.scale[i]);
     }
-    // 각 중심점과의 거리 계산
     var bestIdx = 0;
     var bestDist = Infinity;
     for (var c = 0; c < PARAMS.centers.length; c++) {
@@ -536,7 +574,6 @@ document.querySelectorAll('.fader-col').forEach(function(col) {
     }, { passive: false });
 });
 
-// 초기 예측
 setTimeout(updateResult, 100);
 </script>
 </body>
