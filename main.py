@@ -41,8 +41,6 @@ html, body, .stApp, .stApp * {
     padding-top: 1.2rem; padding-bottom: 1rem;
     max-width: 1280px;
 }
-/* slider는 숨김, 값 동기화 목적 */
-[data-testid="stSlider"] { display: none !important; }
 [data-testid="stAlert"] {
     background: rgba(255,255,255,0.04) !important;
     border: 1px solid rgba(255,255,255,0.08) !important;
@@ -113,12 +111,18 @@ CLUSTER_INFO = {
     3: {"name": "폐암 위험군",   "tone": "danger",  "desc": "흡연·음주가 누적된 위험 환자군입니다."},
 }
 
-# 슬라이더 사용 (number_input의 +/- 클릭 대신 값을 setter로 직접 주입 → 안정적 rerun)
-smoke = st.slider("흡연",   0,   80, 10, 1, key="smoke_in")
-alc   = st.slider("음주량", 0,   20, 3,  1, key="alc_in")
-age   = st.slider("나이",   1,  120, 45, 1, key="age_in")
+# URL query params로부터 현재 값 읽기 (Streamlit이 자동으로 rerun 트리거)
+qp = st.query_params
+smoke = int(qp.get("smoke", 10))
+alc   = int(qp.get("alc",   3))
+age   = int(qp.get("age",  45))
 
-# 항상 예측 실행 (실시간)
+# 범위 검증
+smoke = max(0,  min(40, smoke))
+alc   = max(0,  min(10, alc))
+age   = max(10, min(90, age))
+
+# 예측 (실시간)
 cluster_id = -1
 info = {"name": "대기 중", "tone": "neutral", "desc": "모델 로드 중입니다."}
 n_clusters = 4
@@ -401,45 +405,29 @@ body_html = (
     '</div>'
 )
 
-# JS - 슬라이더에 keydown으로 값 주입 (가장 안정적인 Streamlit 슬라이더 제어 방식)
+# JS - URL query params로 값을 전달하여 Streamlit이 자동으로 rerun
 fader_js = """
 <script>
 (function() {
-    var doc = window.parent.document;
+    // 모든 페이더의 현재 값을 모아 URL 업데이트
+    var pendingValues = {};
+    var commitTimer = null;
 
-    // aria-label로 슬라이더 핸들 찾기
-    function findSlider(label) {
-        var labels = doc.querySelectorAll('[data-testid="stSlider"] label');
-        for (var i = 0; i < labels.length; i++) {
-            if (labels[i].textContent.trim() === label) {
-                var container = labels[i].closest('[data-testid="stSlider"]');
-                if (container) {
-                    return container.querySelector('[role="slider"]');
-                }
-            }
+    function updateUrl() {
+        var parentLoc = window.parent.location;
+        var url = new URL(parentLoc.href);
+        for (var k in pendingValues) {
+            url.searchParams.set(k, String(Math.round(pendingValues[k])));
         }
-        return null;
+        // history API로 url만 변경 → Streamlit이 query_params 변화를 감지하고 rerun
+        window.parent.history.replaceState(null, '', url.toString());
+        // Streamlit이 query param 변화를 인지하도록 popstate 이벤트 발생
+        window.parent.dispatchEvent(new PopStateEvent('popstate'));
     }
 
-    // 슬라이더 값 설정: 키보드 Home → ArrowRight 반복
-    function setSliderValue(handle, targetValue, minVal) {
-        if (!handle) return;
-        // 현재 값
-        var current = parseInt(handle.getAttribute('aria-valuenow'));
-        var target = Math.round(targetValue);
-        var diff = target - current;
-        if (diff === 0) return;
-
-        handle.focus();
-        var key = diff > 0 ? 'ArrowRight' : 'ArrowLeft';
-        var keyCode = diff > 0 ? 39 : 37;
-        var count = Math.abs(diff);
-
-        for (var i = 0; i < count; i++) {
-            handle.dispatchEvent(new KeyboardEvent('keydown', {
-                key: key, code: key, keyCode: keyCode, which: keyCode, bubbles: true
-            }));
-        }
+    function scheduleCommit() {
+        if (commitTimer) clearTimeout(commitTimer);
+        commitTimer = setTimeout(updateUrl, 150);
     }
 
     function fmt(val, decimals) {
@@ -452,7 +440,7 @@ fader_js = """
         var min = parseFloat(col.dataset.min);
         var max = parseFloat(col.dataset.max);
         var decimals = parseInt(col.dataset.decimals);
-        var label = col.dataset.label;
+        var key = col.dataset.key;
         var range = max - min;
         var trackWrap = col.querySelector('.fader-track-wrap');
         var track = col.querySelector('.fader-track');
@@ -460,7 +448,6 @@ fader_js = """
         var handle = col.querySelector('.fader-handle');
         var valueEl = col.querySelector('.fader-value');
         var currentValue = parseFloat(col.dataset.current);
-        var sliderHandle = findSlider(label);
 
         function render() {
             var pct = (currentValue - min) / range;
@@ -476,23 +463,13 @@ fader_js = """
             var ratio = 1 - Math.max(0, Math.min(1, (clientY - trackRect.top) / trackRect.height));
             currentValue = Math.max(min, Math.min(max, min + ratio * range));
             render();
-        }
-
-        function commit() {
-            if (!sliderHandle) sliderHandle = findSlider(label);
-            if (sliderHandle) setSliderValue(sliderHandle, currentValue, min);
+            pendingValues[key] = currentValue;
         }
 
         setTimeout(render, 50);
         window.addEventListener('resize', render);
 
         var dragging = false;
-        var commitTimer = null;
-
-        function scheduleCommit() {
-            if (commitTimer) clearTimeout(commitTimer);
-            commitTimer = setTimeout(commit, 120);
-        }
 
         trackWrap.addEventListener('pointerdown', function(e) {
             e.preventDefault();
@@ -513,7 +490,7 @@ fader_js = """
             if (!dragging) return;
             dragging = false;
             col.classList.remove('dragging');
-            commit();
+            updateUrl();  // 드래그 종료 시 즉시 반영
             try { trackWrap.releasePointerCapture(e.pointerId); } catch(err) {}
         }
         trackWrap.addEventListener('pointerup', stopDrag);
@@ -525,6 +502,7 @@ fader_js = """
             var dir = e.deltaY < 0 ? 1 : -1;
             currentValue = Math.max(min, Math.min(max, currentValue + dir * step));
             render();
+            pendingValues[key] = currentValue;
             scheduleCommit();
         }, { passive: false });
     });
