@@ -41,7 +41,8 @@ html, body, .stApp, .stApp * {
     padding-top: 1.2rem; padding-bottom: 1rem;
     max-width: 1280px;
 }
-[data-testid="stNumberInput"] { display: none !important; }
+/* slider는 숨김, 값 동기화 목적 */
+[data-testid="stSlider"] { display: none !important; }
 [data-testid="stAlert"] {
     background: rgba(255,255,255,0.04) !important;
     border: 1px solid rgba(255,255,255,0.08) !important;
@@ -71,33 +72,9 @@ html, body, .stApp, .stApp * {
     font-size: 0.78rem;
     margin: 0.25rem 0 0 0 !important;
 }
-
-/* 메인 PREDICT 버튼 */
-.stButton > button {
-    background: rgba(255,255,255,0.09) !important;
-    backdrop-filter: blur(20px);
-    color: #fff !important;
-    border: 1px solid rgba(255,255,255,0.2) !important;
-    padding: 0.95rem 2rem !important;
-    border-radius: 14px !important;
-    font-weight: 600 !important;
-    font-size: 0.9rem !important;
-    width: 100% !important;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    box-shadow: 0 4px 14px rgba(0,0,0,0.25);
-    transition: all 0.25s ease !important;
-    margin-top: 0.8rem;
-}
-.stButton > button:hover {
-    background: rgba(255,255,255,0.18) !important;
-    border-color: rgba(255,255,255,0.35) !important;
-    transform: translateY(-1px);
-}
 </style>
 """, unsafe_allow_html=True)
 
-# Hero
 st.markdown("""
 <div class="hero-card">
     <h1>폐암 환자 군집 분석</h1>
@@ -105,7 +82,6 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# 입력 변수 (노트북 컬럼 순서: 흡연, 음주량, 나이)
 VARS = [
     {"key": "smoke", "label": "흡연",   "min": 0,  "max": 40, "default": 10, "decimals": 0},
     {"key": "alc",   "label": "음주량", "min": 0,  "max": 10, "default": 3,  "decimals": 0},
@@ -137,23 +113,17 @@ CLUSTER_INFO = {
     3: {"name": "폐암 위험군",   "tone": "danger",  "desc": "흡연·음주가 누적된 위험 환자군입니다."},
 }
 
-# 폼 상태용 number_input (숨김 처리됨)
-with st.form("cluster_form"):
-    smoke = st.number_input("흡연",   min_value=0,  max_value=80,  value=10, step=1, key="smoke_in")
-    alc   = st.number_input("음주량", min_value=0,  max_value=20,  value=3,  step=1, key="alc_in")
-    age   = st.number_input("나이",   min_value=1,  max_value=120, value=45, step=1, key="age_in")
+# 슬라이더 사용 (number_input의 +/- 클릭 대신 값을 setter로 직접 주입 → 안정적 rerun)
+smoke = st.slider("흡연",   0,   80, 10, 1, key="smoke_in")
+alc   = st.slider("음주량", 0,   20, 3,  1, key="alc_in")
+age   = st.slider("나이",   1,  120, 45, 1, key="age_in")
 
-    # 페이더 UI를 form 내부에 배치하기 위한 placeholder
-    fader_placeholder = st.empty()
-
-    submitted = st.form_submit_button("군집 분석하기")
-
-# 예측 (제출되었을 때만)
+# 항상 예측 실행 (실시간)
 cluster_id = -1
-info = {"name": "대기 중", "tone": "neutral", "desc": "페이더를 조정한 뒤 군집 분석 버튼을 눌러주세요."}
+info = {"name": "대기 중", "tone": "neutral", "desc": "모델 로드 중입니다."}
 n_clusters = 4
 
-if submitted and model is not None:
+if model is not None:
     input_df = pd.DataFrame([[smoke, alc, age]], columns=['흡연', '음주량', '나이'])
     if scaler is not None and hasattr(scaler, 'transform'):
         X_proc = scaler.transform(input_df)
@@ -167,7 +137,7 @@ if submitted and model is not None:
         "desc": "분류된 군집입니다."
     })
 
-# UI CSS
+# ===== UI =====
 fader_css = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
@@ -179,7 +149,7 @@ body { margin: 0; padding: 0; background: transparent; color: #fff; }
     grid-template-columns: 1.05fr 1fr;
     gap: 14px;
     width: 100%;
-    height: 500px;
+    height: 540px;
 }
 
 .panel {
@@ -275,9 +245,7 @@ body { margin: 0; padding: 0; background: transparent; color: #fff; }
     background: linear-gradient(180deg, #f0f0f0, #c0c0c0 45%, #808080 46%, #a8a8a8 100%);
     border: 1px solid rgba(255,255,255,0.3);
     border-radius: 4px;
-    box-shadow:
-        0 3px 8px rgba(0,0,0,0.55),
-        inset 0 1px 0 rgba(255,255,255,0.6);
+    box-shadow: 0 3px 8px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.6);
     cursor: ns-resize;
     pointer-events: none;
 }
@@ -375,7 +343,6 @@ body { margin: 0; padding: 0; background: transparent; color: #fff; }
 </style>
 """
 
-# 페이더 컬럼
 faders_inner = ''
 defaults = {"smoke": smoke, "alc": alc, "age": age}
 for v in VARS:
@@ -400,7 +367,6 @@ for v in VARS:
         '</div>'
     )
 
-# 결과 카드
 dots_html = ''
 for i in range(4):
     cls = 'cluster-dot'
@@ -415,7 +381,7 @@ body_html = (
     '<div class="workspace">'
     '<div class="panel">'
     '<div class="panel-label">Input</div>'
-    '<div class="panel-hint">핸들을 위/아래로 드래그하여 환자 데이터를 입력하세요</div>'
+    '<div class="panel-hint">핸들을 위/아래로 드래그하면 결과가 실시간으로 갱신됩니다</div>'
     '<div class="faders">' + faders_inner + '</div>'
     '</div>'
     '<div class="panel">'
@@ -435,24 +401,45 @@ body_html = (
     '</div>'
 )
 
+# JS - 슬라이더에 keydown으로 값 주입 (가장 안정적인 Streamlit 슬라이더 제어 방식)
 fader_js = """
 <script>
 (function() {
     var doc = window.parent.document;
 
-    function setInputValue(label, value) {
-        var inputs = doc.querySelectorAll('input');
-        for (var i = 0; i < inputs.length; i++) {
-            var inp = inputs[i];
-            if (inp.getAttribute('aria-label') === label) {
-                var setter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype, 'value').set;
-                setter.call(inp, String(value));
-                inp.dispatchEvent(new Event('input', { bubbles: true }));
-                inp.dispatchEvent(new Event('change', { bubbles: true }));
-                return true;
+    // aria-label로 슬라이더 핸들 찾기
+    function findSlider(label) {
+        var labels = doc.querySelectorAll('[data-testid="stSlider"] label');
+        for (var i = 0; i < labels.length; i++) {
+            if (labels[i].textContent.trim() === label) {
+                var container = labels[i].closest('[data-testid="stSlider"]');
+                if (container) {
+                    return container.querySelector('[role="slider"]');
+                }
             }
         }
-        return false;
+        return null;
+    }
+
+    // 슬라이더 값 설정: 키보드 Home → ArrowRight 반복
+    function setSliderValue(handle, targetValue, minVal) {
+        if (!handle) return;
+        // 현재 값
+        var current = parseInt(handle.getAttribute('aria-valuenow'));
+        var target = Math.round(targetValue);
+        var diff = target - current;
+        if (diff === 0) return;
+
+        handle.focus();
+        var key = diff > 0 ? 'ArrowRight' : 'ArrowLeft';
+        var keyCode = diff > 0 ? 39 : 37;
+        var count = Math.abs(diff);
+
+        for (var i = 0; i < count; i++) {
+            handle.dispatchEvent(new KeyboardEvent('keydown', {
+                key: key, code: key, keyCode: keyCode, which: keyCode, bubbles: true
+            }));
+        }
     }
 
     function fmt(val, decimals) {
@@ -473,6 +460,7 @@ fader_js = """
         var handle = col.querySelector('.fader-handle');
         var valueEl = col.querySelector('.fader-value');
         var currentValue = parseFloat(col.dataset.current);
+        var sliderHandle = findSlider(label);
 
         function render() {
             var pct = (currentValue - min) / range;
@@ -480,8 +468,7 @@ fader_js = """
             var h = trackRect.height;
             fill.style.height = (pct * 100) + '%';
             handle.style.top = ((1 - pct) * h) + 'px';
-            var displayVal = decimals === 0 ? Math.round(currentValue) : parseFloat(currentValue.toFixed(decimals));
-            valueEl.textContent = fmt(displayVal, decimals);
+            valueEl.textContent = fmt(currentValue, decimals);
         }
 
         function setFromY(clientY) {
@@ -492,26 +479,34 @@ fader_js = """
         }
 
         function commit() {
-            var displayVal = decimals === 0 ? Math.round(currentValue) : parseFloat(currentValue.toFixed(decimals));
-            setInputValue(label, displayVal);
+            if (!sliderHandle) sliderHandle = findSlider(label);
+            if (sliderHandle) setSliderValue(sliderHandle, currentValue, min);
         }
 
         setTimeout(render, 50);
         window.addEventListener('resize', render);
 
         var dragging = false;
+        var commitTimer = null;
+
+        function scheduleCommit() {
+            if (commitTimer) clearTimeout(commitTimer);
+            commitTimer = setTimeout(commit, 120);
+        }
 
         trackWrap.addEventListener('pointerdown', function(e) {
             e.preventDefault();
             dragging = true;
             col.classList.add('dragging');
             setFromY(e.clientY);
+            scheduleCommit();
             try { trackWrap.setPointerCapture(e.pointerId); } catch(err) {}
         });
 
         trackWrap.addEventListener('pointermove', function(e) {
             if (!dragging) return;
             setFromY(e.clientY);
+            scheduleCommit();
         });
 
         function stopDrag(e) {
@@ -530,16 +525,14 @@ fader_js = """
             var dir = e.deltaY < 0 ? 1 : -1;
             currentValue = Math.max(min, Math.min(max, currentValue + dir * step));
             render();
-            commit();
+            scheduleCommit();
         }, { passive: false });
     });
 })();
 </script>
 """
 
-# 폼 안의 placeholder에 페이더+결과 UI 렌더링
-with fader_placeholder.container():
-    components.html(fader_css + body_html + fader_js, height=540, scrolling=False)
+components.html(fader_css + body_html + fader_js, height=580, scrolling=False)
 
 if load_err:
     st.error(load_err + " 노트북에서 KMeans 모델을 lungkmeans.pkl, StandardScaler를 lungscaler.pkl로 같은 폴더에 저장해 주세요.")
