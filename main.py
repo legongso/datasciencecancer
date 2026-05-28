@@ -17,8 +17,9 @@ if os.environ.get('STREAMLIT_RUNNING') != '1':
 
 import streamlit as st
 import streamlit.components.v1 as components
-import pandas as pd
+import json
 import joblib
+import numpy as np
 
 st.set_page_config(
     page_title="폐암 환자 군집 분석",
@@ -32,7 +33,6 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 html, body, .stApp, .stApp * {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
-    -webkit-font-smoothing: antialiased;
 }
 .stApp, [data-testid="stAppViewContainer"] { background: #0a0b0d !important; }
 [data-testid="stHeader"], [data-testid="stMain"], [data-testid="stMainBlockContainer"],
@@ -80,69 +80,74 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-VARS = [
-    {"key": "smoke", "label": "흡연",   "min": 0,  "max": 40, "default": 10, "decimals": 0},
-    {"key": "alc",   "label": "음주량", "min": 0,  "max": 10, "default": 3,  "decimals": 0},
-    {"key": "age",   "label": "나이",   "min": 10, "max": 90, "default": 45, "decimals": 0},
-]
-
+# ===== 모델 로드 & 중심점/스케일 파라미터 추출 =====
 @st.cache_resource
-def load_model():
+def load_params():
     try:
         obj1 = joblib.load("lungkmeans.pkl")
     except FileNotFoundError:
-        return None, None, "lungkmeans.pkl 파일을 찾을 수 없습니다."
+        return None, "lungkmeans.pkl 파일을 찾을 수 없습니다."
     try:
         obj2 = joblib.load("lungscaler.pkl")
     except FileNotFoundError:
         obj2 = None
-    if hasattr(obj1, 'predict'):
-        return obj1, obj2, None
-    elif obj2 is not None and hasattr(obj2, 'predict'):
-        return obj2, obj1, None
-    return obj1, obj2, None
 
-model, scaler, load_err = load_model()
-
-CLUSTER_INFO = {
-    0: {"name": "중간군",        "tone": "warn",    "desc": "위험 인자가 일부 누적된 중간 수준의 환자군입니다."},
-    1: {"name": "건강군",        "tone": "safe",    "desc": "위험 인자가 낮아 상대적으로 건강한 환자군입니다."},
-    2: {"name": "고위험군",      "tone": "danger2", "desc": "위험 인자가 가장 높은 폐암 고위험 환자군입니다."},
-    3: {"name": "폐암 위험군",   "tone": "danger",  "desc": "흡연·음주가 누적된 위험 환자군입니다."},
-}
-
-# URL query params로부터 현재 값 읽기 (Streamlit이 자동으로 rerun 트리거)
-qp = st.query_params
-smoke = int(qp.get("smoke", 10))
-alc   = int(qp.get("alc",   3))
-age   = int(qp.get("age",  45))
-
-# 범위 검증
-smoke = max(0,  min(40, smoke))
-alc   = max(0,  min(10, alc))
-age   = max(10, min(90, age))
-
-# 예측 (실시간)
-cluster_id = -1
-info = {"name": "대기 중", "tone": "neutral", "desc": "모델 로드 중입니다."}
-n_clusters = 4
-
-if model is not None:
-    input_df = pd.DataFrame([[smoke, alc, age]], columns=['흡연', '음주량', '나이'])
-    if scaler is not None and hasattr(scaler, 'transform'):
-        X_proc = scaler.transform(input_df)
+    if hasattr(obj1, 'cluster_centers_'):
+        kmeans, scaler = obj1, obj2
+    elif obj2 is not None and hasattr(obj2, 'cluster_centers_'):
+        kmeans, scaler = obj2, obj1
     else:
-        X_proc = input_df.values
-    cluster_id = int(model.predict(X_proc)[0])
-    n_clusters = int(getattr(model, 'n_clusters', 4))
-    info = CLUSTER_INFO.get(cluster_id, {
-        "name": "Cluster " + str(cluster_id),
-        "tone": "warn",
-        "desc": "분류된 군집입니다."
-    })
+        return None, "KMeans 모델을 인식할 수 없습니다."
 
-# ===== UI =====
-fader_css = """
+    centers = kmeans.cluster_centers_.tolist()  # 스케일링된 공간의 중심점
+
+    if scaler is not None and hasattr(scaler, 'mean_') and hasattr(scaler, 'scale_'):
+        mean = scaler.mean_.tolist()
+        scale = scaler.scale_.tolist()
+    else:
+        # 스케일러가 없으면 identity
+        mean = [0.0] * len(centers[0])
+        scale = [1.0] * len(centers[0])
+
+    return {
+        "centers": centers,
+        "mean": mean,
+        "scale": scale,
+        "n_clusters": int(getattr(kmeans, "n_clusters", len(centers))),
+    }, None
+
+params, load_err = load_params()
+
+if load_err or params is None:
+    st.error((load_err or "모델 파일을 불러올 수 없습니다.") +
+             " 노트북에서 KMeans 모델을 lungkmeans.pkl, StandardScaler를 lungscaler.pkl로 같은 폴더에 저장해 주세요.")
+    st.stop()
+
+# K=4 기준 군집 의미 (노트북 결과 분석)
+CLUSTER_INFO_LIST = [
+    {"name": "중간군",        "tone": "warn",    "desc": "위험 인자가 일부 누적된 중간 수준의 환자군입니다."},
+    {"name": "건강군",        "tone": "safe",    "desc": "위험 인자가 낮아 상대적으로 건강한 환자군입니다."},
+    {"name": "고위험군",      "tone": "danger2", "desc": "위험 인자가 가장 높은 폐암 고위험 환자군입니다."},
+    {"name": "폐암 위험군",   "tone": "danger",  "desc": "흡연·음주가 누적된 위험 환자군입니다."},
+]
+
+# JS로 안전하게 데이터 전달
+data_payload = {
+    "params": params,
+    "clusterInfo": CLUSTER_INFO_LIST,
+    "vars": [
+        {"key": "smoke", "label": "흡연",   "min": 0,  "max": 40, "default": 10, "decimals": 0},
+        {"key": "alc",   "label": "음주량", "min": 0,  "max": 10, "default": 3,  "decimals": 0},
+        {"key": "age",   "label": "나이",   "min": 10, "max": 90, "default": 45, "decimals": 0},
+    ]
+}
+payload_json = json.dumps(data_payload)
+
+html = """
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 * { box-sizing: border-box; font-family: 'Inter', sans-serif; }
@@ -293,12 +298,12 @@ body { margin: 0; padding: 0; background: transparent; color: #fff; }
     line-height: 1.05;
     margin: 0;
     color: #fff;
+    transition: color 0.4s ease;
 }
 .result-name.safe { color: #6bcf9f; }
 .result-name.warn { color: #ffd166; }
 .result-name.danger { color: #ff8a80; }
 .result-name.danger2 { color: #ff6b6b; }
-.result-name.neutral { color: rgba(255,255,255,0.5); }
 .result-desc {
     color: rgba(255,255,255,0.6);
     font-size: 0.85rem;
@@ -345,174 +350,198 @@ body { margin: 0; padding: 0; background: transparent; color: #fff; }
     font-weight: 600;
 }
 </style>
-"""
+</head>
+<body>
+<div class="workspace">
+    <div class="panel">
+        <div class="panel-label">Input</div>
+        <div class="panel-hint">핸들을 위/아래로 드래그하면 결과가 실시간으로 갱신됩니다</div>
+        <div class="faders" id="faders"></div>
+    </div>
+    <div class="panel">
+        <div class="panel-label">Cluster Result</div>
+        <div class="result-headline">
+            <div class="result-cluster" id="r-cluster">Cluster —</div>
+            <h2 class="result-name" id="r-name">대기 중</h2>
+            <p class="result-desc" id="r-desc">페이더를 조정하세요</p>
+            <div class="cluster-dots" id="dots"></div>
+        </div>
+        <div class="result-stats">
+            <div class="stat-block"><div class="v" id="s-smoke">10</div><div class="l">흡연</div></div>
+            <div class="stat-block"><div class="v" id="s-alc">3</div><div class="l">음주량</div></div>
+            <div class="stat-block"><div class="v" id="s-age">45</div><div class="l">나이</div></div>
+        </div>
+    </div>
+</div>
 
-faders_inner = ''
-defaults = {"smoke": smoke, "alc": alc, "age": age}
-for v in VARS:
-    cur_val = defaults[v['key']]
-    rng_text = "{0:g} \u2014 {1:g}".format(v['min'], v['max'])
-    val_str = ("{0:." + str(v['decimals']) + "f}").format(float(cur_val))
-    faders_inner += (
-        '<div class="fader-col"'
-        ' data-key="' + v['key'] + '"'
-        ' data-min="' + str(v['min']) + '"'
-        ' data-max="' + str(v['max']) + '"'
-        ' data-decimals="' + str(v['decimals']) + '"'
-        ' data-label="' + v['label'] + '"'
-        ' data-current="' + str(float(cur_val)) + '">'
-        '<div class="fader-label">' + v['label'] + '</div>'
-        '<div class="fader-track-wrap">'
-        '<div class="fader-track"><div class="fader-fill"></div></div>'
-        '<div class="fader-handle"></div>'
-        '</div>'
-        '<div class="fader-value">' + val_str + '</div>'
-        '<div class="fader-range">' + rng_text + '</div>'
-        '</div>'
-    )
-
-dots_html = ''
-for i in range(4):
-    cls = 'cluster-dot'
-    if i == cluster_id:
-        cls += ' active ' + info["tone"]
-    style = '' if i < n_clusters else ' style="display:none;"'
-    dots_html += '<div class="' + cls + '"' + style + '></div>'
-
-cluster_label = "Cluster · " + str(cluster_id) if cluster_id >= 0 else "Cluster —"
-
-body_html = (
-    '<div class="workspace">'
-    '<div class="panel">'
-    '<div class="panel-label">Input</div>'
-    '<div class="panel-hint">핸들을 위/아래로 드래그하면 결과가 실시간으로 갱신됩니다</div>'
-    '<div class="faders">' + faders_inner + '</div>'
-    '</div>'
-    '<div class="panel">'
-    '<div class="panel-label">Cluster Result</div>'
-    '<div class="result-headline">'
-    '<div class="result-cluster">' + cluster_label + '</div>'
-    '<h2 class="result-name ' + info["tone"] + '">' + info["name"] + '</h2>'
-    '<p class="result-desc">' + info["desc"] + '</p>'
-    '<div class="cluster-dots">' + dots_html + '</div>'
-    '</div>'
-    '<div class="result-stats">'
-    '<div class="stat-block"><div class="v">' + str(int(smoke)) + '</div><div class="l">흡연</div></div>'
-    '<div class="stat-block"><div class="v">' + str(int(alc))   + '</div><div class="l">음주량</div></div>'
-    '<div class="stat-block"><div class="v">' + str(int(age))   + '</div><div class="l">나이</div></div>'
-    '</div>'
-    '</div>'
-    '</div>'
-)
-
-# JS - URL query params로 값을 전달하여 Streamlit이 자동으로 rerun
-fader_js = """
 <script>
-(function() {
-    // 모든 페이더의 현재 값을 모아 URL 업데이트
-    var pendingValues = {};
-    var commitTimer = null;
+var DATA = __PAYLOAD__;
+var VARS = DATA.vars;
+var PARAMS = DATA.params;
+var CLUSTER_INFO = DATA.clusterInfo;
+var values = {};
+VARS.forEach(function(v) { values[v.key] = v.default; });
 
-    function updateUrl() {
-        var parentLoc = window.parent.location;
-        var url = new URL(parentLoc.href);
-        for (var k in pendingValues) {
-            url.searchParams.set(k, String(Math.round(pendingValues[k])));
-        }
-        // history API로 url만 변경 → Streamlit이 query_params 변화를 감지하고 rerun
-        window.parent.history.replaceState(null, '', url.toString());
-        // Streamlit이 query param 변화를 인지하도록 popstate 이벤트 발생
-        window.parent.dispatchEvent(new PopStateEvent('popstate'));
+// 페이더 DOM 생성
+var fadersContainer = document.getElementById('faders');
+VARS.forEach(function(v) {
+    var col = document.createElement('div');
+    col.className = 'fader-col';
+    col.dataset.key = v.key;
+    col.dataset.min = v.min;
+    col.dataset.max = v.max;
+    col.dataset.decimals = v.decimals;
+    col.innerHTML =
+        '<div class="fader-label">' + v.label + '</div>' +
+        '<div class="fader-track-wrap">' +
+            '<div class="fader-track"><div class="fader-fill"></div></div>' +
+            '<div class="fader-handle"></div>' +
+        '</div>' +
+        '<div class="fader-value">' + v.default + '</div>' +
+        '<div class="fader-range">' + v.min + ' \u2014 ' + v.max + '</div>';
+    fadersContainer.appendChild(col);
+});
+
+// 군집 점 생성
+var dotsContainer = document.getElementById('dots');
+for (var i = 0; i < PARAMS.n_clusters; i++) {
+    var dot = document.createElement('div');
+    dot.className = 'cluster-dot';
+    dot.dataset.idx = i;
+    dotsContainer.appendChild(dot);
+}
+
+function fmt(val, decimals) {
+    if (decimals === 0) return String(Math.round(val));
+    return val.toFixed(decimals);
+}
+
+// 클라이언트 사이드 K-Means 예측
+function predict() {
+    // 입력 순서: [흡연, 음주량, 나이] - 노트북과 동일
+    var x = [values.smoke, values.alc, values.age];
+    // 스케일링
+    var scaled = [];
+    for (var i = 0; i < x.length; i++) {
+        scaled.push((x[i] - PARAMS.mean[i]) / PARAMS.scale[i]);
     }
-
-    function scheduleCommit() {
-        if (commitTimer) clearTimeout(commitTimer);
-        commitTimer = setTimeout(updateUrl, 150);
+    // 각 중심점과의 거리 계산
+    var bestIdx = 0;
+    var bestDist = Infinity;
+    for (var c = 0; c < PARAMS.centers.length; c++) {
+        var center = PARAMS.centers[c];
+        var d = 0;
+        for (var j = 0; j < center.length; j++) {
+            var diff = scaled[j] - center[j];
+            d += diff * diff;
+        }
+        if (d < bestDist) {
+            bestDist = d;
+            bestIdx = c;
+        }
     }
+    return bestIdx;
+}
 
-    function fmt(val, decimals) {
-        var d = parseInt(decimals);
-        if (d === 0) return String(Math.round(val));
-        return val.toFixed(d);
-    }
+function updateResult() {
+    var clusterId = predict();
+    var info = CLUSTER_INFO[clusterId] || { name: "Cluster " + clusterId, tone: "warn", desc: "분류된 군집입니다." };
 
-    document.querySelectorAll('.fader-col').forEach(function(col) {
-        var min = parseFloat(col.dataset.min);
-        var max = parseFloat(col.dataset.max);
-        var decimals = parseInt(col.dataset.decimals);
-        var key = col.dataset.key;
-        var range = max - min;
-        var trackWrap = col.querySelector('.fader-track-wrap');
-        var track = col.querySelector('.fader-track');
-        var fill = col.querySelector('.fader-fill');
-        var handle = col.querySelector('.fader-handle');
-        var valueEl = col.querySelector('.fader-value');
-        var currentValue = parseFloat(col.dataset.current);
+    document.getElementById('r-cluster').textContent = 'Cluster · ' + clusterId;
+    var nameEl = document.getElementById('r-name');
+    nameEl.textContent = info.name;
+    nameEl.className = 'result-name ' + info.tone;
+    document.getElementById('r-desc').textContent = info.desc;
 
-        function render() {
-            var pct = (currentValue - min) / range;
-            var trackRect = track.getBoundingClientRect();
-            var h = trackRect.height;
-            fill.style.height = (pct * 100) + '%';
-            handle.style.top = ((1 - pct) * h) + 'px';
-            valueEl.textContent = fmt(currentValue, decimals);
+    var dots = document.querySelectorAll('.cluster-dot');
+    dots.forEach(function(d, i) {
+        d.className = 'cluster-dot';
+        if (i === clusterId) {
+            d.classList.add('active', info.tone);
         }
-
-        function setFromY(clientY) {
-            var trackRect = track.getBoundingClientRect();
-            var ratio = 1 - Math.max(0, Math.min(1, (clientY - trackRect.top) / trackRect.height));
-            currentValue = Math.max(min, Math.min(max, min + ratio * range));
-            render();
-            pendingValues[key] = currentValue;
-        }
-
-        setTimeout(render, 50);
-        window.addEventListener('resize', render);
-
-        var dragging = false;
-
-        trackWrap.addEventListener('pointerdown', function(e) {
-            e.preventDefault();
-            dragging = true;
-            col.classList.add('dragging');
-            setFromY(e.clientY);
-            scheduleCommit();
-            try { trackWrap.setPointerCapture(e.pointerId); } catch(err) {}
-        });
-
-        trackWrap.addEventListener('pointermove', function(e) {
-            if (!dragging) return;
-            setFromY(e.clientY);
-            scheduleCommit();
-        });
-
-        function stopDrag(e) {
-            if (!dragging) return;
-            dragging = false;
-            col.classList.remove('dragging');
-            updateUrl();  // 드래그 종료 시 즉시 반영
-            try { trackWrap.releasePointerCapture(e.pointerId); } catch(err) {}
-        }
-        trackWrap.addEventListener('pointerup', stopDrag);
-        trackWrap.addEventListener('pointercancel', stopDrag);
-
-        trackWrap.addEventListener('wheel', function(e) {
-            e.preventDefault();
-            var step = range / 100;
-            var dir = e.deltaY < 0 ? 1 : -1;
-            currentValue = Math.max(min, Math.min(max, currentValue + dir * step));
-            render();
-            pendingValues[key] = currentValue;
-            scheduleCommit();
-        }, { passive: false });
     });
-})();
+
+    document.getElementById('s-smoke').textContent = Math.round(values.smoke);
+    document.getElementById('s-alc').textContent = Math.round(values.alc);
+    document.getElementById('s-age').textContent = Math.round(values.age);
+}
+
+// 페이더 인터랙션
+document.querySelectorAll('.fader-col').forEach(function(col) {
+    var min = parseFloat(col.dataset.min);
+    var max = parseFloat(col.dataset.max);
+    var decimals = parseInt(col.dataset.decimals);
+    var key = col.dataset.key;
+    var range = max - min;
+    var trackWrap = col.querySelector('.fader-track-wrap');
+    var track = col.querySelector('.fader-track');
+    var fill = col.querySelector('.fader-fill');
+    var handle = col.querySelector('.fader-handle');
+    var valueEl = col.querySelector('.fader-value');
+    var currentValue = values[key];
+
+    function render() {
+        var pct = (currentValue - min) / range;
+        var trackRect = track.getBoundingClientRect();
+        var h = trackRect.height;
+        fill.style.height = (pct * 100) + '%';
+        handle.style.top = ((1 - pct) * h) + 'px';
+        valueEl.textContent = fmt(currentValue, decimals);
+    }
+
+    function setFromY(clientY) {
+        var trackRect = track.getBoundingClientRect();
+        var ratio = 1 - Math.max(0, Math.min(1, (clientY - trackRect.top) / trackRect.height));
+        currentValue = Math.max(min, Math.min(max, min + ratio * range));
+        values[key] = currentValue;
+        render();
+        updateResult();
+    }
+
+    setTimeout(render, 50);
+    window.addEventListener('resize', render);
+
+    var dragging = false;
+
+    trackWrap.addEventListener('pointerdown', function(e) {
+        e.preventDefault();
+        dragging = true;
+        col.classList.add('dragging');
+        setFromY(e.clientY);
+        try { trackWrap.setPointerCapture(e.pointerId); } catch(err) {}
+    });
+
+    trackWrap.addEventListener('pointermove', function(e) {
+        if (!dragging) return;
+        setFromY(e.clientY);
+    });
+
+    function stopDrag(e) {
+        if (!dragging) return;
+        dragging = false;
+        col.classList.remove('dragging');
+        try { trackWrap.releasePointerCapture(e.pointerId); } catch(err) {}
+    }
+    trackWrap.addEventListener('pointerup', stopDrag);
+    trackWrap.addEventListener('pointercancel', stopDrag);
+
+    trackWrap.addEventListener('wheel', function(e) {
+        e.preventDefault();
+        var step = range / 100;
+        var dir = e.deltaY < 0 ? 1 : -1;
+        currentValue = Math.max(min, Math.min(max, currentValue + dir * step));
+        values[key] = currentValue;
+        render();
+        updateResult();
+    }, { passive: false });
+});
+
+// 초기 예측
+setTimeout(updateResult, 100);
 </script>
+</body>
+</html>
 """
 
-components.html(fader_css + body_html + fader_js, height=580, scrolling=False)
-
-if load_err:
-    st.error(load_err + " 노트북에서 KMeans 모델을 lungkmeans.pkl, StandardScaler를 lungscaler.pkl로 같은 폴더에 저장해 주세요.")
-elif scaler is None:
-    st.warning("lungscaler.pkl을 찾을 수 없어 raw 입력으로 예측했습니다. 정확도가 떨어질 수 있습니다.")
+html = html.replace("__PAYLOAD__", payload_json)
+components.html(html, height=580, scrolling=False)
