@@ -71,6 +71,29 @@ html, body, .stApp, .stApp * {
     font-size: 0.78rem;
     margin: 0.25rem 0 0 0 !important;
 }
+
+/* 메인 PREDICT 버튼 */
+.stButton > button {
+    background: rgba(255,255,255,0.09) !important;
+    backdrop-filter: blur(20px);
+    color: #fff !important;
+    border: 1px solid rgba(255,255,255,0.2) !important;
+    padding: 0.95rem 2rem !important;
+    border-radius: 14px !important;
+    font-weight: 600 !important;
+    font-size: 0.9rem !important;
+    width: 100% !important;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+    transition: all 0.25s ease !important;
+    margin-top: 0.8rem;
+}
+.stButton > button:hover {
+    background: rgba(255,255,255,0.18) !important;
+    border-color: rgba(255,255,255,0.35) !important;
+    transform: translateY(-1px);
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -89,7 +112,6 @@ VARS = [
     {"key": "age",   "label": "나이",   "min": 10, "max": 90, "default": 45, "decimals": 0},
 ]
 
-# 모델 로드 (파일이 뒤바뀌어도 자동 인식)
 @st.cache_resource
 def load_model():
     try:
@@ -108,7 +130,6 @@ def load_model():
 
 model, scaler, load_err = load_model()
 
-# K-means 학습 결과에 따라 매핑 (K=4 기준, 노트북 셀 30 분석)
 CLUSTER_INFO = {
     0: {"name": "중간군",        "tone": "warn",    "desc": "위험 인자가 일부 누적된 중간 수준의 환자군입니다."},
     1: {"name": "건강군",        "tone": "safe",    "desc": "위험 인자가 낮아 상대적으로 건강한 환자군입니다."},
@@ -117,16 +138,22 @@ CLUSTER_INFO = {
 }
 
 # 폼 상태용 number_input (숨김 처리됨)
-smoke = st.number_input("흡연",   min_value=0,  max_value=80,  value=10, step=1, key="smoke_in")
-alc   = st.number_input("음주량", min_value=0,  max_value=20,  value=3,  step=1, key="alc_in")
-age   = st.number_input("나이",   min_value=1,  max_value=120, value=45, step=1, key="age_in")
+with st.form("cluster_form"):
+    smoke = st.number_input("흡연",   min_value=0,  max_value=80,  value=10, step=1, key="smoke_in")
+    alc   = st.number_input("음주량", min_value=0,  max_value=20,  value=3,  step=1, key="alc_in")
+    age   = st.number_input("나이",   min_value=1,  max_value=120, value=45, step=1, key="age_in")
 
-# 예측
+    # 페이더 UI를 form 내부에 배치하기 위한 placeholder
+    fader_placeholder = st.empty()
+
+    submitted = st.form_submit_button("군집 분석하기")
+
+# 예측 (제출되었을 때만)
 cluster_id = -1
-info = {"name": "대기 중", "tone": "neutral", "desc": "페이더를 움직여 예측을 시작하세요."}
+info = {"name": "대기 중", "tone": "neutral", "desc": "페이더를 조정한 뒤 군집 분석 버튼을 눌러주세요."}
 n_clusters = 4
 
-if model is not None:
+if submitted and model is not None:
     input_df = pd.DataFrame([[smoke, alc, age]], columns=['흡연', '음주량', '나이'])
     if scaler is not None and hasattr(scaler, 'transform'):
         X_proc = scaler.transform(input_df)
@@ -140,7 +167,7 @@ if model is not None:
         "desc": "분류된 군집입니다."
     })
 
-# UI 빌드
+# UI CSS
 fader_css = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
@@ -152,7 +179,7 @@ body { margin: 0; padding: 0; background: transparent; color: #fff; }
     grid-template-columns: 1.05fr 1fr;
     gap: 14px;
     width: 100%;
-    height: 540px;
+    height: 500px;
 }
 
 .panel {
@@ -278,7 +305,6 @@ body { margin: 0; padding: 0; background: transparent; color: #fff; }
     letter-spacing: 0.06em;
 }
 
-/* RESULT */
 .result-headline { text-align: center; flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 0 12px; }
 .result-cluster {
     color: rgba(255,255,255,0.45);
@@ -349,7 +375,7 @@ body { margin: 0; padding: 0; background: transparent; color: #fff; }
 </style>
 """
 
-# Fader 컬럼 HTML
+# 페이더 컬럼
 faders_inner = ''
 defaults = {"smoke": smoke, "alc": alc, "age": age}
 for v in VARS:
@@ -374,7 +400,7 @@ for v in VARS:
         '</div>'
     )
 
-# 결과 카드 HTML (서버 사이드에서 미리 렌더)
+# 결과 카드
 dots_html = ''
 for i in range(4):
     cls = 'cluster-dot'
@@ -409,7 +435,6 @@ body_html = (
     '</div>'
 )
 
-# JS - 페이더 인터랙션
 fader_js = """
 <script>
 (function() {
@@ -475,26 +500,18 @@ fader_js = """
         window.addEventListener('resize', render);
 
         var dragging = false;
-        var commitTimer = null;
-
-        function scheduleCommit() {
-            if (commitTimer) clearTimeout(commitTimer);
-            commitTimer = setTimeout(commit, 80);
-        }
 
         trackWrap.addEventListener('pointerdown', function(e) {
             e.preventDefault();
             dragging = true;
             col.classList.add('dragging');
             setFromY(e.clientY);
-            scheduleCommit();
             try { trackWrap.setPointerCapture(e.pointerId); } catch(err) {}
         });
 
         trackWrap.addEventListener('pointermove', function(e) {
             if (!dragging) return;
             setFromY(e.clientY);
-            scheduleCommit();
         });
 
         function stopDrag(e) {
@@ -513,14 +530,16 @@ fader_js = """
             var dir = e.deltaY < 0 ? 1 : -1;
             currentValue = Math.max(min, Math.min(max, currentValue + dir * step));
             render();
-            scheduleCommit();
+            commit();
         }, { passive: false });
     });
 })();
 </script>
 """
 
-components.html(fader_css + body_html + fader_js, height=580, scrolling=False)
+# 폼 안의 placeholder에 페이더+결과 UI 렌더링
+with fader_placeholder.container():
+    components.html(fader_css + body_html + fader_js, height=540, scrolling=False)
 
 if load_err:
     st.error(load_err + " 노트북에서 KMeans 모델을 lungkmeans.pkl, StandardScaler를 lungscaler.pkl로 같은 폴더에 저장해 주세요.")
